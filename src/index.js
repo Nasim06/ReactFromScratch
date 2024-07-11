@@ -35,6 +35,7 @@ function createDom(fibre) {
     return dom;
 }
 
+
 const isEvent = key => key.startsWith("on")
 
 const isProperty = key => key !== "children" && !isEvent(key)
@@ -42,6 +43,7 @@ const isProperty = key => key !== "children" && !isEvent(key)
 const isNew = (prev, next) => key => prev[key] !== next[key]
 
 const isGone = (prev, next) => key => !(key in next)
+
 
 function updateDom(dom, prevProps, nextProps) {
 
@@ -88,11 +90,18 @@ function commitRoot() {
     wipRoot = null;
 }
   
+
 function commitWork(fibre) {
     if (!fibre) {
       return
     }
-    const domParent = fibre.parent.dom;
+
+    let domParentFibre = fibre.parent
+    while (!domParentFibre.dom) {
+        domParentFibre = domParentFibre.parent
+    }
+    const domParent = domParentFibre.dom
+
     if (fibre.effectTag === "PLACEMENT" && fibre.dom != null) {
         domParent.appendChild(fibre.dom);
     } 
@@ -100,10 +109,20 @@ function commitWork(fibre) {
         updateDom(fibre.dom, fibre.alternate.props, fibre.props);
     } 
     else if (fibre.effectTag === "DELETION") {
-        domParent.removeChild(fibre.dom);
+        commitDeletion(fibre, domParent)
     }
+
     commitWork(fibre.child);
     commitWork(fibre.sibling);
+}
+
+
+function commitDeletion(fibre, domParent) {
+    if (fibre.dom) {
+        domParent.removeChild(fibre.dom)
+    } else {
+        commitDeletion(fibre.child, domParent)
+    }
 }
 
 
@@ -145,12 +164,12 @@ requestIdleCallback(workLoop);
 
 
 function performUnitOfWork(fibre) {
-    if(!fibre.dom) {
-        fibre.dom = createDom(fibre)
+    const isFunctionComponent = fibre.type instanceof Function
+    if(isFunctionComponent) {
+        updateFunctionComponent(fibre)
+    } else{
+        updateHostComponent(fibre)
     }
-
-    const elements = fibre.props.children;
-    reconcileChildren(fibre, elements);
 
     if(fibre.child) {
         return fibre.child
@@ -164,6 +183,60 @@ function performUnitOfWork(fibre) {
         }
         nextFibre = nextFibre.parent
     }
+}
+
+
+let wipFibre = null;
+let hookIndex = null;
+
+
+function updateFunctionComponent(fibre) {
+    wipFibre = fibre;
+    hookIndex = 0;
+    wipFibre.hooks = [];
+    const children = [fibre.type(fibre.props)];
+    reconcileChildren(fibre, children);
+}
+
+
+function updateHostComponent(fibre) {
+    if(!fibre.dom) {
+        fibre.dom = createDom(fibre);
+    }
+    reconcileChildren(fibre, fibre.props.children);
+}
+
+
+function useState(initial) {
+    const oldHook =
+        wipFibre.alternate &&
+        wipFibre.alternate.hooks &&
+        wipFibre.alternate.hooks[hookIndex]
+
+    const hook = {
+        state: oldHook ? oldHook.state : initial,
+        queue: [],
+    }
+
+    const actions = oldHook ? oldHook.queue : []
+    actions.forEach(action => {
+        hook.state = action(hook.state)
+    })
+    
+    const setState = action => {
+        hook.queue.push(action);
+        wipRoot = {
+            dom: currentRoot.dom,
+            props: currentRoot.props,
+            alternate: currentRoot,
+        };
+        nextUnitOfWork = wipRoot;
+        deletions = [];
+    }
+
+    wipFibre.hooks.push(hook);
+    hookIndex++;
+    return [hook.state, setState]
 }
 
 
@@ -222,37 +295,28 @@ function reconcileChildren(wipFibre, elements) {
 
 
 
-
-
 const notReact = {
     createElement,
-    render
+    render,
+    useState
 };
 
 /** @jsxRuntime classic */
 /** @jsx notReact.createElement */
+function Counter() {
+    const [state, setState] = notReact.useState(1)
+    return (
+        <div>
+            <h1> Count: {state} </h1>
+            <button onClick={() => setState(c => c + 1)} > 
+                Click me
+            </button>
+        </div>
+    )
+}
+const element = <Counter />
 const container = document.getElementById("root")
-const updateValue = e => {
-  rerender(e.target.value)
-}
-const rerender = value => {
-  const element = (
-    <div>
-      <input onInput={updateValue} value={value} />
-      <h2>Hello {value}</h2>
-    </div>
-  )
-  notReact.render(element, container)
-}
-rerender("World")
+notReact.render(element, container)
 
 
-// const element = (
-//     <div style="background: aliceblue">
-//     <h1>Hello World</h1>
-//     <h2 style="text-align:right">notReact</h2>
-//     </div>
-// );
 
-// const container = document.getElementById("root");
-// notReact.render(element, container);
